@@ -1,4 +1,4 @@
-package me.alexand.app
+package me.alexand.ok.mp.m1l1first
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
