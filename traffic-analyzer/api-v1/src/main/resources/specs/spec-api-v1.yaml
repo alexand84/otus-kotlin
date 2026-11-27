@@ -1,0 +1,911 @@
+openapi: 3.0.3
+
+info:
+  title: API анализатора сетевого трафика
+  version: 1.0.0
+  description: |
+    API v1 анализатора сетевого трафика IPFIX/NetFlow.
+  contact:
+    name: Анализатор трафика
+
+servers:
+  - url: http://localhost:8080
+    description: Локальный API-шлюз (Envoy)
+
+tags:
+  - name: Справочники
+    description: Значения перечислений для выпадающих списков и фильтров UI.
+  - name: Информационные элементы
+    description: Справочник информационных элементов IPFIX.
+  - name: Сенсоры
+    description: Экспортеры NetFlow/IPFIX и сигналы активности коллектора.
+  - name: Шаблоны
+    description: Шаблоны IPFIX, анонсированные сенсорами.
+  - name: Отчёты
+    description: Динамические отчёты по трафику на основе ClickHouse.
+
+paths:
+  /api/v1/dictionaries:
+    get:
+      tags:
+        - Справочники
+      operationId: getDictionaries
+      summary: Получить справочники перечислений для UI
+      description: Возвращает все значения перечислений, используемые UI для выпадающих списков и фильтров.
+      responses:
+        '200':
+          description: Справочники
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictionariesDto'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/elements:
+    get:
+      tags:
+        - Информационные элементы
+      operationId: getInformationElements
+      summary: Получить список информационных элементов
+      description: Возвращает полный справочник информационных элементов.
+      parameters:
+        - name: search
+          in: query
+          required: false
+          description: Поиск без учёта регистра по системному или отображаемому имени.
+          schema:
+            type: string
+            maxLength: 128
+        - name: role
+          in: query
+          required: false
+          description: Фильтр по аналитической роли.
+          schema:
+            $ref: '#/components/schemas/ElementRole'
+      responses:
+        '200':
+          description: Информационные элементы
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/InformationElementDto'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      tags:
+        - Информационные элементы
+      operationId: createInformationElement
+      summary: Создать пользовательский информационный элемент
+      description: |
+        Создаёт пользовательский информационный элемент. Сервер назначает
+        внутренний идентификатор и устанавливает `isSystem` в `false`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InformationElementCreateRequestDto'
+      responses:
+        '201':
+          description: Информационный элемент создан
+          headers:
+            Location:
+              description: URL созданного информационного элемента.
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InformationElementDto'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/elements/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Внутренний идентификатор информационного элемента.
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+    put:
+      tags:
+        - Информационные элементы
+      operationId: updateInformationElement
+      summary: Обновить информационный элемент
+      description: |
+        Обновляет редактируемые поля информационного элемента. Системные
+        элементы (IANA) защищены от изменения.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InformationElementUpdateRequestDto'
+      responses:
+        '200':
+          description: Обновлённый информационный элемент
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InformationElementDto'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags:
+        - Информационные элементы
+      operationId: deleteInformationElement
+      summary: Удалить пользовательский информационный элемент
+      description: Системные элементы (IANA) защищены от удаления.
+      responses:
+        '204':
+          description: Информационный элемент удалён
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/sensors:
+    get:
+      tags:
+        - Сенсоры
+      operationId: getSensors
+      summary: Получить список сенсоров
+      description: |
+        Возвращает сенсоры с вычисленным статусом, текущим IP-адресом и
+        статистикой по пакетам.
+      parameters:
+        - name: includeArchived
+          in: query
+          required: false
+          description: Включать архивные сенсоры в ответ.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Сенсоры
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SensorDto'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/sensors/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Идентификатор сенсора.
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags:
+        - Сенсоры
+      operationId: updateSensor
+      summary: Переименовать сенсор
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SensorUpdateRequestDto'
+      responses:
+        '200':
+          description: Обновлённый сенсор
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SensorDto'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags:
+        - Сенсоры
+      operationId: deleteSensor
+      summary: Удалить неактивный сенсор
+      description: |
+        Удаляет неактивный сенсор и его шаблоны. Исторические записи потоков
+        остаются доступны в отчётах. Онлайн-сенсор удалить нельзя.
+      responses:
+        '204':
+          description: Сенсор удалён
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/sensors/{sensorId}/templates:
+    parameters:
+      - name: sensorId
+        in: path
+        required: true
+        description: Идентификатор сенсора.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags:
+        - Шаблоны
+      operationId: getSensorTemplates
+      summary: Получить активные шаблоны сенсора
+      description: |
+        Возвращает активные шаблоны сенсора с расшифровкой информационных
+        элементов для отображения в UI.
+      responses:
+        '200':
+          description: Шаблоны сенсора
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/IpfixTemplateDto'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/templates:
+    get:
+      tags:
+        - Шаблоны
+      operationId: getAllTemplates
+      summary: Получить все шаблоны
+      description: |
+        Возвращает все известные шаблоны. Используется коллектором при
+        запуске для прогрева кэша шаблонов.
+      responses:
+        '200':
+          description: Все шаблоны
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/IpfixTemplateDto'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/sensors/heartbeat:
+    post:
+      tags:
+        - Сенсоры
+      operationId: sendCollectorHeartbeat
+      summary: Отправить сигнал активности коллектора
+      description: |
+        Принимает пакет статистики сенсоров и обновления шаблонов от
+        коллектора. Запрос также фиксирует активность самого коллектора.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HeartbeatRequestDto'
+      responses:
+        '200':
+          description: Сигнал активности принят
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/reports/query:
+    post:
+      tags:
+        - Отчёты
+      operationId: executeReportQuery
+      summary: Выполнить динамический отчёт
+      description: |
+        Проверяет запрошенные поля по справочнику информационных элементов,
+        генерирует запрос к ClickHouse и возвращает данные для графиков и
+        таблиц.
+
+        Поля в `groupBy` должны иметь роль `KEY`, поля в `metrics` — роль
+        `METRIC`. Неизвестные поля и неподдерживаемые операторы отклоняются
+        с ошибкой `400`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportQueryDto'
+      responses:
+        '200':
+          description: Результат отчёта
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportQueryResultDto'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  schemas:
+    DataType:
+      type: string
+      description: Физический тип данных информационного элемента IPFIX.
+      enum:
+        - OCTET_ARRAY
+        - UNSIGNED8
+        - UNSIGNED16
+        - UNSIGNED32
+        - UNSIGNED64
+        - SIGNED8
+        - SIGNED16
+        - SIGNED32
+        - SIGNED64
+        - FLOAT32
+        - FLOAT64
+        - BOOLEAN
+        - MAC_ADDRESS
+        - STRING
+        - DATE_TIME_SECONDS
+        - DATE_TIME_MILLISECONDS
+        - DATE_TIME_MICROSECONDS
+        - DATE_TIME_NANOSECONDS
+        - IPV4_ADDRESS
+        - IPV6_ADDRESS
+        - BASIC_LIST
+        - SUB_TEMPLATE_LIST
+        - SUB_TEMPLATE_MULTI_LIST
+
+    ElementRole:
+      type: string
+      description: |
+        Аналитическая роль информационного элемента: `KEY` — измерение для
+        фильтрации и группировки, `METRIC` — значение для агрегации.
+      enum:
+        - KEY
+        - METRIC
+
+    AggregationType:
+      type: string
+      description: Функция агрегации, применяемая к метрике.
+      enum:
+        - SUM
+        - AVG
+        - MIN
+        - MAX
+        - COUNT
+        - COUNT_DISTINCT
+
+    FilterOperator:
+      type: string
+      description: |
+        Оператор сравнения. Использует скалярное значение `value`.
+      enum:
+        - EQ
+        - NEQ
+        - GT
+        - GTE
+        - LT
+        - LTE
+        - LIKE
+
+    SensorStatus:
+      type: string
+      description: Вычисленный статус сенсора по последнему сигналу активности.
+      enum:
+        - ONLINE
+        - OFFLINE
+
+    IpAddressDto:
+      type: string
+      description: IPv4- или IPv6-адрес.
+
+    DictionariesDto:
+      type: object
+      description: Значения перечислений, доступные UI.
+      required:
+        - dataTypes
+        - roles
+        - aggregations
+        - filterOperators
+      properties:
+        dataTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataType'
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/ElementRole'
+        aggregations:
+          type: array
+          items:
+            $ref: '#/components/schemas/AggregationType'
+        filterOperators:
+          type: array
+          items:
+            $ref: '#/components/schemas/FilterOperator'
+
+    InformationElementDto:
+      type: object
+      description: Запись справочника информационных элементов IPFIX.
+      required:
+        - id
+        - enterpriseId
+        - elementId
+        - fieldName
+        - displayName
+        - dataType
+        - role
+        - isSystem
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Внутренний идентификатор.
+        enterpriseId:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 4294967295
+          description: Номер предприятия IANA; `0` для стандартных элементов IANA.
+        elementId:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 65535
+          description: Числовой код элемента в стандартном или вендорском реестре.
+        fieldName:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_]*$'
+          maxLength: 64
+          description: Уникальное машинное имя поля.
+        displayName:
+          type: string
+          maxLength: 255
+          description: Человекочитаемое имя для UI.
+        dataType:
+          $ref: '#/components/schemas/DataType'
+        role:
+          $ref: '#/components/schemas/ElementRole'
+        isSystem:
+          type: boolean
+          description: Системные элементы защищены от изменения и удаления.
+
+    InformationElementCreateRequestDto:
+      type: object
+      description: |
+        Запрос на создание пользовательского информационного элемента. Сервер
+        назначает внутренний идентификатор и устанавливает `isSystem` в `false`.
+      required:
+        - enterpriseId
+        - elementId
+        - fieldName
+        - displayName
+        - dataType
+        - role
+      properties:
+        enterpriseId:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 4294967295
+        elementId:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 65535
+        fieldName:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_]*$'
+          maxLength: 64
+        displayName:
+          type: string
+          maxLength: 255
+        dataType:
+          $ref: '#/components/schemas/DataType'
+        role:
+          $ref: '#/components/schemas/ElementRole'
+
+    InformationElementUpdateRequestDto:
+      type: object
+      description: Редактируемые поля пользовательского информационного элемента.
+      minProperties: 1
+      properties:
+        displayName:
+          type: string
+          maxLength: 255
+        dataType:
+          $ref: '#/components/schemas/DataType'
+        role:
+          $ref: '#/components/schemas/ElementRole'
+
+    SensorDto:
+      type: object
+      description: Экспортер NetFlow/IPFIX, зарегистрированный в системе.
+      required:
+        - id
+        - name
+        - currentIp
+        - observationDomainId
+        - firstSeenAt
+        - lastSeenAt
+        - packetsReceived
+        - isArchived
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Постоянный идентификатор сенсора.
+        name:
+          type: string
+          maxLength: 255
+          description: Пользовательское имя сенсора.
+        currentIp:
+          $ref: '#/components/schemas/IpAddressDto'
+        observationDomainId:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 4294967295
+          description: Идентификатор домена наблюдения из заголовка IPFIX.
+        firstSeenAt:
+          type: string
+          format: date-time
+          description: Время первой регистрации сенсора.
+        lastSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Время получения последнего пакета.
+        packetsReceived:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Накопительное количество принятых пакетов.
+        isArchived:
+          type: boolean
+          description: Флаг мягкого удаления. Архивные сенсоры скрыты по умолчанию.
+        status:
+          $ref: '#/components/schemas/SensorStatus'
+
+    SensorUpdateRequestDto:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          description: Новое имя сенсора.
+
+    TemplateFieldDto:
+      type: object
+      description: Поле (слот) внутри шаблона IPFIX.
+      required:
+        - id
+        - templateId
+        - position
+        - enterpriseId
+        - elementId
+        - length
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Внутренний идентификатор.
+        templateId:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Внутренний идентификатор родительского шаблона.
+        position:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 65535
+          description: Позиция поля в шаблоне, начиная с нуля.
+        enterpriseId:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 4294967295
+          description: Номер предприятия из пакета шаблона.
+        elementId:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 65535
+          description: Код элемента из пакета шаблона.
+        length:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65535
+          description: Длина поля в байтах.
+        informationElement:
+          description: Расшифрованный информационный элемент; отсутствует, если элемент неизвестен.
+          allOf:
+            - $ref: '#/components/schemas/InformationElementDto'
+
+    IpfixTemplateDto:
+      type: object
+      description: Шаблон, анонсированный сенсором.
+      required:
+        - id
+        - sensorId
+        - observationDomainId
+        - templateId
+        - updatedAt
+        - fields
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Внутренний идентификатор шаблона.
+        sensorId:
+          type: string
+          format: uuid
+          description: Сенсор — владелец шаблона.
+        observationDomainId:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 4294967295
+          description: Домен наблюдения шаблона.
+        templateId:
+          type: integer
+          format: int32
+          minimum: 256
+          maximum: 65535
+          description: Идентификатор шаблона, назначенный сенсором.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Время последнего получения или обновления шаблона.
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateFieldDto'
+
+    SensorHeartbeatDto:
+      type: object
+      description: Статистика сенсора.
+      required:
+        - exporterIp
+        - observationDomainId
+        - packetsReceived
+        - lastSeenAt
+      properties:
+        exporterIp:
+          $ref: '#/components/schemas/IpAddressDto'
+        observationDomainId:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 4294967295
+        packetsReceived:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Накопительный счётчик пакетов, переданный коллектором.
+        lastSeenAt:
+          type: string
+          format: date-time
+          description: Время последнего получения данных от сенсора коллектором.
+
+    HeartbeatRequestDto:
+      type: object
+      required:
+        - sensors
+      properties:
+        sensors:
+          type: array
+          description: Статистика сенсоров.
+          items:
+            $ref: '#/components/schemas/SensorHeartbeatDto'
+
+    ReportMetricDto:
+      type: object
+      description: Метрика для агрегации в отчёте.
+      required:
+        - field
+        - aggregation
+      properties:
+        field:
+          type: string
+          description: InformationElement.fieldName с ролью METRIC.
+        aggregation:
+          $ref: '#/components/schemas/AggregationType'
+
+    ReportFilterDto:
+      type: object
+      description: Условие фильтрации отчёта.
+      required:
+        - field
+        - operator
+        - value
+      properties:
+        field:
+          type: string
+          description: Имя поля `InformationElement.fieldName`.
+        operator:
+          $ref: '#/components/schemas/FilterOperator'
+        value:
+          type: string
+          nullable: false
+          description: Скалярное значение для операторов сравнения.
+
+    ReportQueryDto:
+      type: object
+      description: Запрос динамического отчёта.
+      required:
+        - from
+        - to
+        - metrics
+      properties:
+        sensorIds:
+          type: array
+          description: Сенсоры для включения; пустой список или отсутствие — все сенсоры.
+          items:
+            type: string
+            format: uuid
+        from:
+          type: string
+          format: date-time
+          description: Начало периода отчёта (включительно).
+        to:
+          type: string
+          format: date-time
+          description: Конец периода отчёта (не включая).
+        step:
+          type: string
+          pattern: '^[1-9][0-9]*[smhd]$'
+          default: '1m'
+          description: Размер временного интервала, например `1m`, `5m`, `1h` или `1d`.
+        groupBy:
+          type: array
+          description: Значения InformationElement.fieldName с ролью KEY.
+          items:
+            type: string
+        metrics:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ReportMetricDto'
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReportFilterDto'
+        limit:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 10000
+          default: 1000
+          description: Максимальное количество возвращаемых строк.
+
+    ReportColumnDto:
+      type: object
+      description: Метаданные выходной колонки.
+      required:
+        - name
+        - dataType
+      properties:
+        name:
+          type: string
+          description: Имя выходной колонки (алиас или имя поля).
+        field:
+          type: string
+          description: Исходное InformationElement.fieldName, если применимо.
+        dataType:
+          $ref: '#/components/schemas/DataType'
+        role:
+          $ref: '#/components/schemas/ElementRole'
+
+    ReportQueryResultDto:
+      type: object
+      description: Результат динамического отчёта.
+      required:
+        - columns
+        - rows
+        - totalRows
+        - executionTimeMs
+      properties:
+        columns:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReportColumnDto'
+        rows:
+          type: array
+          description: Строки, ключами которых являются имена выходных колонок.
+          items:
+            type: object
+            additionalProperties: true
+        totalRows:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Количество строк, возвращённых в ответе.
+        executionTimeMs:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Время выполнения запроса в миллисекундах.
+
+    ErrorResponseDto:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Машиночитаемый код ошибки.
+        message:
+          type: string
+          description: Человекочитаемое сообщение об ошибке.
+        details:
+          type: object
+          additionalProperties: true
+          description: Дополнительные детали ошибки.
+
+  responses:
+    BadRequest:
+      description: Некорректные параметры запроса или тело запроса.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseDto'
+    Forbidden:
+      description: Операция не разрешена для этого ресурса.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseDto'
+    NotFound:
+      description: Запрошенный ресурс не найден.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseDto'
+    Conflict:
+      description: Запрос конфликтует с текущим состоянием ресурса.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseDto'
+    InternalServerError:
+      description: Внутренняя ошибка сервера.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseDto'

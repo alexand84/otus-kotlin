@@ -16,4 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "traffic-analyzer"
 
+include(":api-v1")
 include(":netflow-receiver")
